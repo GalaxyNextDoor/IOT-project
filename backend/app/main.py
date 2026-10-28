@@ -41,8 +41,8 @@ RESET = "\033[0m"
 
 class DemonstrationLoggerMiddleware(BaseHTTPMiddleware):
     """
-    Middleware to intercept and display full request & response details
-    in the server terminal for real-time live demonstration.
+    Enhanced live demonstration middleware for Raspberry Pi & server terminal.
+    Renders incoming client requests and Zero-Trust verdicts in high-visibility formatted boxes.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -51,6 +51,7 @@ class DemonstrationLoggerMiddleware(BaseHTTPMiddleware):
         client_port = request.client.port if request.client else ""
         method = request.method
         url_path = request.url.path
+        timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))
 
         # Intercept and read request body if JSON/text
         req_body_str = ""
@@ -63,7 +64,7 @@ class DemonstrationLoggerMiddleware(BaseHTTPMiddleware):
                 except Exception:
                     req_body_str = req_body_bytes.decode("utf-8", errors="replace")
 
-            # Re-wrap body stream so downstream request handlers can read it again
+            # Re-wrap body stream so downstream request handlers can read it
             async def receive():
                 return {"type": "http.request", "body": req_body_bytes}
 
@@ -72,29 +73,34 @@ class DemonstrationLoggerMiddleware(BaseHTTPMiddleware):
             req_body_str = f"<Unable to read body: {e}>"
 
         # Headers of interest for IoT Zero-Trust
-        device_id = request.headers.get("x-device-id", "N/A")
-        api_key_header = request.headers.get("x-api-key", "N/A")
+        device_id = request.headers.get("x-device-id") or request.headers.get("device-id") or "N/A"
+        api_key_header = request.headers.get("x-api-key") or request.headers.get("api-key") or "N/A"
         if api_key_header != "N/A" and len(api_key_header) > 8:
             masked_api_key = api_key_header[:6] + "..." + api_key_header[-2:]
         else:
             masked_api_key = api_key_header
 
-        # Print Incoming Request Banner
+        # Print Incoming Request Box (tailored for Raspberry Pi terminal display)
         print(f"\n{BOLD}{CYAN}╔════════════════════════════════════════════════════════════════════════════════════════╗{RESET}")
-        print(f"{BOLD}{CYAN}║ 📥 INCOMING REQUEST: [{client_host}:{client_port}] ➔ [Server]                     ║{RESET}")
+        print(f"{BOLD}{CYAN}║ 🚀 [RASPBERRY PI] INCOMING REQUEST RECEIVED                                           ║{RESET}")
         print(f"{CYAN}╠════════════════════════════════════════════════════════════════════════════════════════╣{RESET}")
-        print(f"  {BOLD}Method / Path:{RESET} {GREEN}{method} {url_path}{RESET}")
-        print(f"  {BOLD}Device Identification:{RESET} Device-ID: {MAGENTA}{device_id}{RESET} | API Key: {MAGENTA}{masked_api_key}{RESET}")
+        print(f"  {BOLD}Timestamp        :{RESET} {YELLOW}{timestamp_str}{RESET}")
+        print(f"  {BOLD}Client / Origin  :{RESET} {BOLD}{GREEN}{client_host}:{client_port}{RESET}")
+        print(f"  {BOLD}HTTP Request     :{RESET} {BOLD}{GREEN}{method}{RESET} {CYAN}{url_path}{RESET}")
+        print(f"  {BOLD}Device ID (Header):{RESET} {MAGENTA}{device_id}{RESET}")
+        print(f"  {BOLD}API Key (Header) :{RESET} {MAGENTA}{masked_api_key}{RESET}")
         if req_body_str:
-            print(f"  {BOLD}Payload / Data Sent:{RESET}\n{req_body_str}")
-        print(f"{CYAN}────────────────────────────────────────────────────────────────────────────────────────{RESET}")
+            print(f"  {BOLD}Request Body     :{RESET}")
+            for line in req_body_str.splitlines():
+                print(f"    {line}")
+        print(f"{CYAN}╟────────────────────────────────────────────────────────────────────────────────────────╢{RESET}")
 
         # Process the request
         try:
             response = await call_next(request)
         except Exception as exc:
             process_time = (time.time() - start_time) * 1000
-            print(f"  {BOLD}{RED}💥 UNHANDLED EXCEPTION ({process_time:.2f}ms): {exc}{RESET}")
+            print(f"  {BOLD}{RED}❌ UNHANDLED EXCEPTION ({process_time:.2f} ms): {exc}{RESET}")
             print(f"{BOLD}{RED}╚════════════════════════════════════════════════════════════════════════════════════════╝{RESET}\n")
             raise exc
 
@@ -124,22 +130,27 @@ class DemonstrationLoggerMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             res_body_str = f"<Unable to inspect response body: {e}>"
 
-        # Determine status color
+        # Determine status color & Zero-Trust evaluation verdict
         if 200 <= response.status_code < 300:
             status_color = GREEN
-            decision = "ALLOW"
+            decision = "✔ ALLOWED / TRUSTED"
         elif response.status_code in (401, 403):
             status_color = RED
-            decision = "DENY / QUARANTINE"
+            decision = "⛔ DENIED / QUARANTINED (ZERO-TRUST ENFORCED)"
+        elif response.status_code == 404:
+            status_color = YELLOW
+            decision = "⚠ NOT FOUND"
         else:
             status_color = YELLOW
-            decision = "WARNING"
+            decision = f"⚠ STATUS {response.status_code}"
 
         # Print Server Response Banner
-        print(f"  {BOLD}Zero-Trust Decision:{RESET} {status_color}{BOLD}{decision}{RESET}")
-        print(f"  {BOLD}Response Code:{RESET} {status_color}{response.status_code}{RESET} ({process_time:.2f} ms latency)")
+        print(f"  {BOLD}Zero-Trust Verdict:{RESET} {status_color}{BOLD}{decision}{RESET}")
+        print(f"  {BOLD}HTTP Status Code  :{RESET} {status_color}{BOLD}{response.status_code}{RESET} ({process_time:.2f} ms latency)")
         if res_body_str:
-            print(f"  {BOLD}Response Payload Sent back to [{client_host}]:{RESET}\n{res_body_str}")
+            print(f"  {BOLD}Response to Client:{RESET}")
+            for line in res_body_str.splitlines():
+                print(f"    {line}")
         print(f"{BOLD}{CYAN}╚════════════════════════════════════════════════════════════════════════════════════════╝{RESET}\n")
 
         return response
